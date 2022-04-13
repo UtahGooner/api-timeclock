@@ -1,0 +1,16 @@
+{
+  "include": ["./lib/**/*"],
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ES2020",
+    "strict": true,
+    "allowJs": true,
+    "emitDeclarationOnly": false,
+    "lib": ["es6"],
+    "moduleResolution": "Node",
+    "esModuleInterop": true,
+  },
+  "exclude": [
+    "./node_modules/*"
+  ]
+}

@@ -1,0 +1,17 @@
+/node_modules/
+/.env
+/.idea
+
+# Project exclude paths
+/lib/images/image-handler.js
+/lib/jobs/job-postings.js
+/lib/time-clock/departments.js
+/lib/time-clock/employee.js
+/lib/time-clock/entry.js
+/lib/time-clock/pay-period-spreadsheet.js
+/lib/time-clock/pay-periods.js
+/lib/time-clock/settings.js
+/lib/time-clock/supervisors.js
+/lib/time-clock/utils.js
+/lib/router.js
+/lib/types.js
