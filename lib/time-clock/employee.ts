@@ -3,7 +3,7 @@ import {Employee} from "../types";
 import {RowDataPacket} from "mysql2";
 import {mysql2Pool} from "chums-local-modules";
 import {Request, Response} from "express";
-import {loadPayPeriodEntries} from "./entry.js";
+import {loadEmployeeLatestEntry, loadPayPeriodEntries} from "./entry.js";
 import {parseWeekTotals} from "./utils.js";
 
 
@@ -122,7 +122,7 @@ export async function loadEmployees({
             idEmployee,
             includeInactive: includeInactive ? 1 : 0
         };
-        // debug('loadEmployees()', data);
+        debug('loadEmployees()', data);
         const [rows] = await mysql2Pool.query<EmployeeRow[]>(query, data);
         return rows.map(row => {
             return {
@@ -248,7 +248,8 @@ export const getEmployee = async (req: Request, res: Response) => {
             ...req.params,
             userId: res.locals.profile?.user?.id,
         });
-        res.json({employee})
+        const entry = await loadEmployeeLatestEntry({idEmployee: employee.id});
+        res.json({employee, entry})
     } catch (err: unknown) {
         if (err instanceof Error) {
             debug("getEmployee()", err.message);

@@ -20,7 +20,9 @@ import {
     postLoginCode
 } from "./time-clock/employee.js";
 import {buildPayPeriods, getCurrentPayPeriod, getPayPeriods, postCompletePayPeriod} from "./time-clock/pay-periods.js";
-import {getPayPeriodSpreadSheet, getPayPeriodSSData} from "./time-clock/pay-period-spreadsheet.js";
+import {getPayPeriodSpreadSheet, getPayPeriodSSData} from "./payroll/pay-period-spreadsheet.js";
+import {getPRImportFile, testPRImportFile} from "./payroll/sage-import.js";
+import {postClockIn, postClockOut} from "./time-clock/clock-actions.js";
 
 const debug = Debug('chums:lib:router');
 
@@ -41,6 +43,9 @@ const validateAdmin = validateRole(adminRoles);
 const validateSupervisor = validateRole(supervisorRoles);
 
 // routes that can be accessed without valid login
+
+router.post('/clock/in', postClockIn);
+router.post('/clock/out', postClockOut);
 router.post('/employees/code/:loginCode', getEmployee);
 router.get('/images/active', getActiveBanners);
 router.get('/job-postings/active/:id(\\d+)?', getActiveJobPostings);
@@ -76,8 +81,10 @@ router.get('/pay-period/on/:date', getCurrentPayPeriod);
 router.post('/pay-period/:idPayPeriod(\\d+)/complete', validateAdmin, postCompletePayPeriod);
 router.post('/pay-period/build', buildPayPeriods);
 
+router.get('/sage-import/:idPayPeriod(\\d+)/download', validateAdmin, getPRImportFile)
+router.get('/sage-import/:idPayPeriod(\\d+)/test', validateAdmin, testPRImportFile);
 
 router.get('/supervisors', validateSupervisor, getSupervisors);
 router.get('/supervisors/:idEmployee', getEmployeeSupervisors);
-router.post('/supervisors/:idEmployee(\\d+)/:idUser(\\d+)', postSupervisor);
-router.delete('/supervisors/:idEmployee(\\d+)/:idUser(\\d+)', deleteSupervisor);
+router.post('/supervisors/:idEmployee(\\d+)/:idUser(\\d+)', validateSupervisor, postSupervisor);
+router.delete('/supervisors/:idEmployee(\\d+)/:idUser(\\d+)', validateSupervisor, deleteSupervisor);

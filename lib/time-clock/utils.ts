@@ -33,24 +33,25 @@ export async function parseWeekTotals(rows: Entry[] = []): Promise<EntryWeek[]> 
 
         rows.filter(row => !row.deleted)
             .forEach(row => {
-                const week = row.Week || 0;
-                weeks[week].Duration += row.Duration;
-                if (weeks[week].Duration > STD_HOURS) {
-                    weeks[week].Overtime = weeks[week].Duration - STD_HOURS;
+                const weekIndex = row.Week || 0;
+                const week = weeks[weekIndex];
+                week.Duration += row.Duration;
+                if (week.Duration > STD_HOURS) {
+                    week.Overtime = week.Duration - STD_HOURS;
                 }
-                weeks[week].hasErrors ||= row.errors.length > 0;
+                week.hasErrors ||= row.errors.length > 0;
 
-                weeks[week].Approved = weeks[week].Approved && !!row.Approved;
-                weeks[week].ApprovedBy ||= row.ApprovedBy;
-                weeks[week].ApprovalTime ||= row.ApprovalTime;
+                week.Approved = week.Approved && !!row.Approved;
+                week.ApprovedBy ||= row.ApprovedBy;
+                week.ApprovalTime ||= row.ApprovalTime;
 
-                weeks[week].EmployeeApproved &&= !!row.EmployeeApproved;
-                weeks[week].EmployeeApprovalTime ||= row.EmployeeApprovalTime;
+                week.EmployeeApproved &&= !!row.EmployeeApproved;
+                week.EmployeeApprovalTime ||= row.EmployeeApprovalTime;
                 if (row.idEntryType === ENTRY_TYPES.TIMECLOCK) {
-                    weeks[week].isClockedIn ||= !!row.isClockedIn;
+                    week.isClockedIn ||= !!row.isClockedIn;
                 }
                 if (row.idEntryType === ENTRY_TYPES.PERSONAL_LEAVE) {
-                    weeks[week].PersonalLeaveDuration += row.Duration;
+                    week.PersonalLeaveDuration += row.Duration;
                 }
             });
 
@@ -69,6 +70,14 @@ export function entrySorter(a: Entry, b: Entry): number {
 }
 
 
+export const actionSorter = (field: keyof EntryAction, ascending: boolean = true) =>
+    (a:EntryAction, b:EntryAction) => {
+        return (a[field] === b[field]
+            ? a.id - b.id
+            : (a[field] > b[field] ? 1 : -1)
+        ) * (ascending ? 1 : -1);
+    }
+
 export async function validateEntries(rows: Entry[] = []): Promise<Entry[]> {
     try {
         const now = new Date();
@@ -81,18 +90,43 @@ export async function validateEntries(rows: Entry[] = []): Promise<Entry[]> {
                 }
 
                 const id = row.id;
-                const clockInTime = new Date(row.EntryDate);
-                const futureEntries = rows.filter(row => row.idEntryType === 1 && row.id !== id && new Date(row.EntryDate) > clockInTime);
 
-                if (row.isClockedIn && (!!futureEntries.length || addHours(clockInTime, MISSING_CLOCK_MAX_HOURS) < now)) {
+                // return latest clock in action or clock in adjustment
+                const [clockInAction] = row.actions.filter(action => action.actionType & CLOCK_IN_ACTION).sort(actionSorter('id', false));
+
+                // return latest clock out action or clock out adjustment
+                const [clockOutAction] = row.actions.filter(action => action.actionType & CLOCK_OUT_ACTION).sort(actionSorter('id', false));
+
+                if (!!clockInAction && !!clockOutAction) {
+                    // employee clocked in and out (or has been adjusted), so all ok
+                    return row;
+                }
+                if (!clockInAction && !clockOutAction) {
+                    // hasn't happened yet, not likely to happen
+                    row.errors.push('This entry is missing all clock in and clock out entries');
+                }
+
+                if (!clockInAction) {
+                    // employee forgot to clock in and hasn't been adjusted
+                    row.errors.push('This entry is missing a clock in action');
+                    return row;
+                }
+                // Employee must be clocked in, so look for future entries to indicate they clocked in/out after this entry
+                const clockInTime = new Date(clockInAction.time);
+                const futureEntries = rows.filter(entry => {
+                    return entry.idEntryType === ENTRY_TYPES.TIMECLOCK
+                        && entry.id !== id
+                        && new Date(entry.EntryDate) > clockInTime
+                });
+                // if there are future entries or the max hours have past, then mark as error;
+                if (!!futureEntries.length ||  addHours(clockInTime, MISSING_CLOCK_MAX_HOURS) < now) {
                     row.isClockedIn = false;
                     row.errors.push('This entry is missing a clock out action');
                     return row;
                 }
-                if (!row.isClockedIn && row.actions.filter(action => action.actionType & CLOCK_IN_ACTION).length === 0) {
-                    row.errors.push('This entry is missing a clock in action');
-                    return row;
-                }
+
+                // all ok, employee is still clocked in.
+                row.Duration = Math.round((now.valueOf() - clockInTime.valueOf()) / 1000);
                 return row;
             });
     } catch (err: unknown) {

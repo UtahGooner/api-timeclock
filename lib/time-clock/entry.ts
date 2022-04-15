@@ -1,6 +1,6 @@
 import Debug from 'debug';
 import {mysql2Pool} from 'chums-local-modules';
-import {Entry, EntryAction} from "../types";
+import {BaseEntry, BaseEntryAction, Entry, EntryAction} from "../types";
 import {ResultSetHeader, RowDataPacket} from "mysql2";
 import {isClockedIn, validateEntries} from "./utils.js";
 import {ENTRY_TYPES} from "./settings.js";
@@ -54,15 +54,24 @@ interface LoadEntryProps {
     idEntryType?: string | number,
 }
 
-export async function loadEmployeeEntry({idEmployee, id}: LoadEntryProps): Promise<Entry> {
-    if (!id) {
-        return Promise.reject(new Error('Invalid entry ID'));
+export async function loadEmployeeEntry({idEmployee, id}: LoadEntryProps): Promise<Entry|null> {
+    try {
+        if (id === 0) {
+            return null;
+        }
+        if (!id || !+id) {
+            return Promise.reject(new Error('Invalid entry ID'));
+        }
+        const [entry] = await loadEntries(idEmployee, [Number(id)]);
+        return entry || null;
+    } catch(err:unknown) {
+        if (err instanceof Error) {
+            debug("loadEmployeeEntry()", err.message);
+            return Promise.reject(err);
+        }
+        debug("loadEmployeeEntry()", err);
+        return Promise.reject(new Error('Error in loadEmployeeEntry()'));
     }
-    const [entry] = await loadEntries(idEmployee, [Number(id)]);
-    if (!entry) {
-        return Promise.reject(new Error(`Entry ${id} not found`));
-    }
-    return entry;
 }
 
 
@@ -110,7 +119,7 @@ export async function loadEmployeeLatestEntry({
 }
 
 
-export async function saveEntryAction(entryAction: EntryAction): Promise<EntryAction> {
+export async function saveEntryAction(entryAction: BaseEntryAction): Promise<EntryAction> {
     try {
         const {idEntry, actionType, time, ip, notes} = entryAction;
         const sql = `INSERT INTO timeclock.EntryAction(idEntry, type, time, ip, notes)
@@ -129,7 +138,7 @@ export async function saveEntryAction(entryAction: EntryAction): Promise<EntryAc
 }
 
 
-export async function saveNewEntry(entry: Entry): Promise<Entry> {
+export async function saveNewEntry(entry: BaseEntry): Promise<Entry> {
     try {
         if (!entry.idEmployee) {
             return Promise.reject(new Error('Invalid employee'));
@@ -143,7 +152,7 @@ export async function saveNewEntry(entry: Entry): Promise<Entry> {
                        VALUES (:idEmployee, :idEntryType, :idUser, UNIX_TIMESTAMP(:EntryDate), :Duration, :Note)`;
         const args = {idEmployee, idEntryType, EntryDate, idUser, Duration, Note}
         const [result] = await mysql2Pool.query<ResultSetHeader>(query, args);
-        const [_entry] = await loadEntries(idEmployee, [result.insertId]);
+        const [_entry] = await loadEntries(idEmployee, [result.insertId], true);
         return _entry;
     } catch (err: unknown) {
         if (err instanceof Error) {
@@ -231,12 +240,13 @@ async function loadEntriesHelper(rows: Entry[]): Promise<Entry[]> {
         if (!rows.length) {
             return [];
         }
-        const idEntryList = rows.map(row => row.id);
+        const idEntryList = rows.map(row => row.id || 0).filter(id => !!id);
         const entryActions = await loadEntryActions(idEntryList);
         return rows.map(row => {
             const actions = entryActions.filter(action => action.idEntry === row.id);
             return {
                 ...row,
+                errors: [],
                 actions,
                 EmployeeApproved: !!row.EmployeeApproved,
                 Approved: !!row.Approved,
@@ -254,7 +264,7 @@ async function loadEntriesHelper(rows: Entry[]): Promise<Entry[]> {
     }
 }
 
-export async function loadEntries(idEmployee: number | string, entryIDs: number[]): Promise<Entry[]> {
+export async function loadEntries(idEmployee: number | string, entryIDs: number[], skipValidation:boolean = false): Promise<Entry[]> {
     try {
         if (entryIDs.length === 0) {
             return [];
@@ -289,6 +299,9 @@ export async function loadEntries(idEmployee: number | string, entryIDs: number[
 
         const [rows] = await mysql2Pool.query<EntryRow[]>(query, params);
         const entries = await loadEntriesHelper(rows);
+        if (skipValidation) {
+            return entries;
+        }
         return await validateEntries(entries);
     } catch (err: unknown) {
         if (err instanceof Error) {

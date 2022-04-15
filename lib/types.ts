@@ -56,14 +56,16 @@ export interface EmployeePayPeriodTotal extends EmployeeBase, EmployeePersonalLe
     entries?: Entry[],
     weeks: [EntryWeek, EntryWeek],
 }
-
-export interface EntryAction {
-    id: number,
+export interface BaseEntryAction {
+    id?: number,
     idEntry: number,
     actionType: number,
-    time: string,
+    time: string|Date,
     ip: string,
     notes: object|string,
+}
+export interface EntryAction extends BaseEntryAction {
+    id: number,
     timestamp: string,
 }
 
@@ -80,19 +82,22 @@ export interface EntryWeek {
     isClockedIn: boolean,
 }
 
-export interface Entry {
-    id: number,
+export interface BaseEntry {
+    id?: number,
     idEmployee: number,
     idEntryType: number,
     idUser: number,
     EntryDate: string|Date,
     Duration: number,
     Note?: string,
+}
+export interface Entry extends BaseEntry {
+    id: number,
     EmployeeApproved: boolean|1|0,
-    EmployeeApprovalTime?: string,
+    EmployeeApprovalTime: string|null,
     Approved: boolean|1|0,
     ApprovedBy: number,
-    ApprovalTime?: string,
+    ApprovalTime: string|null,
     deleted: boolean|1|0,
     deletedBy: number,
     timestamp: string,
@@ -150,4 +155,40 @@ export interface PayPeriodSSRecord extends PayPeriodSSEmployee, PayPeriodSSEarni
     SupervisorName: string,
     WeekNumber?: string|number,
     seconds?: number,
+}
+
+export interface PRImportLine {
+    EmployeeKey: string,
+    WeeksWorked: number,
+    DaysWorked: number,
+    EarningsCode: string,
+    EarningsType: string,
+    hours: number,
+}
+
+export interface PRImportData {
+    EmployeeKey: string,
+    Department: string,
+    EmployeeNumber: string,
+    PayMethod: string,
+    DayWorked: string,
+    WeekWorked: number,
+    EarningsCode: string,
+    EarningsType: string,
+    seconds: number,
+}
+
+
+export interface ClockActionBody {
+    loginCode: string,
+    override?: boolean,
+    idEntry?: number,
+    notes?: string,
+    entryDate?: string,
+}
+
+export interface ClockActionResult {
+    entry?: Entry|null,
+    existing?: Entry|null,
+    warning?: string,
 }

@@ -5,7 +5,7 @@ import {PayPeriodSSEarnings, PayPeriodSSRecord} from "../types";
 import {RowDataPacket} from "mysql2";
 import Decimal from 'decimal.js-light';
 import {Request, Response} from "express";
-import {loadPayPeriods} from "./pay-periods.js";
+import {loadPayPeriods, loadPayPeriodSSEntries} from "../time-clock/pay-periods.js";
 import {utils} from 'xlsx';
 
 const debug = Debug('chums:lib:time-clock:pay-period-spreadsheets');
@@ -57,7 +57,7 @@ export interface LoadPayPeriodSSEntriesProps {
     idPayPeriod: number|string,
     format?: string,
 }
-export async function loadPayPeriodSSEntries({idPayPeriod, format = 'hhmm'}:LoadPayPeriodSSEntriesProps):Promise<PayPeriodSSRecord[]> {
+export async function parsePayPeriodSSEntries({idPayPeriod, format = 'hhmm'}:LoadPayPeriodSSEntriesProps):Promise<PayPeriodSSRecord[]> {
     try {
         const emptyPPEarnings:PayPeriodSSEarnings = {
             Hours_000001: 0,
@@ -69,45 +69,7 @@ export async function loadPayPeriodSSEntries({idPayPeriod, format = 'hhmm'}:Load
             Hours_FMLA67: 0,
             Hours_FMLA10: 0,
         }
-        const query = `SELECT ee.EmployeeKey,
-                              CONCAT(ee.FirstName, ' ', ee.LastName)        AS EmployeeName,
-                              ee.Department,
-                              ee.EmployeeNumber,
-                              ee.PayMethod,
-                              SUM(IF(et.MASCode = '000001', e.Duration, 0)) AS Hours_000001,
-                              SUM(IF(et.MASCode = '000002', e.Duration, 0)) AS Hours_000002,
-                              SUM(IF(et.MASCode = '000003', e.Duration, 0)) AS Hours_000003,
-                              SUM(IF(et.MASCode = '000004', e.Duration, 0)) AS Hours_000004,
-                              SUM(IF(et.MASCode = '000011', e.Duration, 0)) AS Hours_000011,
-                              SUM(IF(et.MASCode = 'ASSIST', e.Duration, 0)) AS Hours_ASSIST,
-                              SUM(IF(et.MASCode = 'FMLA67', e.Duration, 0)) AS Hours_FMLA67,
-                              SUM(IF(et.MASCode = 'FMLA10', e.Duration, 0)) AS Hours_FMLA10,
-                              MAX(e.EmployeeApprovalTime)                   AS EmployeeApprovalTime,
-                              MAX(e.ApprovalTime)                           AS SupervisorApprovalTime,
-                              GROUP_CONCAT(DISTINCT u.name)                 AS SupervisorName,
-                              YEARWEEK(FROM_UNIXTIME(e.EntryDate), 1)          AS WeekNumber,
-                              SUM(e.Duration)                               AS seconds
-                       FROM timeclock.Entry e
-                            INNER JOIN timeclock.EmployeeLink ee
-                                       ON ee.id = e.idEmployee
-                            INNER JOIN timeclock.EntryType et
-                                       ON et.id = e.idEntryType
-                            INNER JOIN (
-                                       SELECT StartDate, EndDate
-                                       FROM timeclock.PayPeriods
-                                       WHERE id = :idPayPeriod) pp
-                            LEFT JOIN  users.users u
-                                       ON e.ApprovedBy = u.id
-                       WHERE e.EntryDate BETWEEN pp.StartDate AND pp.EndDate
-                         AND (ee.EmployeeStatus = 'A' OR (
-                               (ISNULL(ee.TerminationDate) OR pp.startDate < UNIX_TIMESTAMP(ee.TerminationDate))
-                               AND pp.EndDate > UNIX_TIMESTAMP(ee.HireDate)))
-                         AND e.deleted = 0
-                       GROUP BY EmployeeKey, EmployeeName, ee.Department, ee.EmployeeNumber,
-                                YEARWEEK(FROM_UNIXTIME(e.EntryDate), 1)
-                       ORDER BY ee.Department, ee.EmployeeNumber, WeekNumber`;
-        const data = {idPayPeriod};
-        const [rows] = await mysql2Pool.query<PayPeriodSSRow[]>(query, data);
+        const rows:PayPeriodSSRow[] = await loadPayPeriodSSEntries(idPayPeriod);
         const employees:PayPeriodResultObject = {};
 
         rows.forEach(row => {
@@ -174,11 +136,11 @@ export async function loadPayPeriodSSEntries({idPayPeriod, format = 'hhmm'}:Load
 
     } catch (err:unknown) {
         if (err instanceof Error) {
-            debug("loadPayPeriodSSEntries()", err.message);
+            debug("parsePayPeriodSSEntries()", err.message);
             return Promise.reject(err);
         }
-        debug('loadPayPeriodSSEntries()',err);
-        return Promise.reject(new Error('Error in loadPayPeriodSSEntries()'));
+        debug('parsePayPeriodSSEntries()',err);
+        return Promise.reject(new Error('Error in parsePayPeriodSSEntries()'));
 
     }
 }
@@ -193,7 +155,7 @@ export async function getPayPeriodSSData(req:Request, res:Response) {
             idPayPeriod: req.params.idPayPeriod,
             format: req.query.format as string,
         }
-        const entries = await loadPayPeriodSSEntries(params);
+        const entries = await parsePayPeriodSSEntries(params);
         res.json({payPeriod, entries});
     } catch (err:unknown) {
         if (err instanceof Error) {
@@ -217,7 +179,7 @@ export async function getPayPeriodSpreadSheet(req:Request, res:Response) {
             idPayPeriod: req.params.idPayPeriod,
             format: req.query.format as string,
         }
-        const entries = await loadPayPeriodSSEntries(params) as PayPeriodSSRow[];
+        const entries = await parsePayPeriodSSEntries(params) as PayPeriodSSRow[];
         const ppRows = [['Start', payPeriod.startDate], ['End', payPeriod.endDate]];
         const sheet1 = utils.aoa_to_sheet(ppRows);
         const sheet = addResultToExcelSheet(sheet1, parseDataForAOA(entries, colNames, true), {origin: 4});
