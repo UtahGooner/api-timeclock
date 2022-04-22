@@ -7,7 +7,7 @@ import {
     ENTRY_TYPES,
     MISSING_CLOCK_MAX_HOURS,
     STD_HOURS
-} from "./settings.js";
+} from "./constants.js";
 import {addHours} from "date-fns";
 
 const debug = Debug('chums:lib:time-clock:utils');
@@ -21,7 +21,7 @@ export function isClockedIn(actions: EntryAction[] = []): boolean {
             .length === 0;
 }
 
-export async function parseWeekTotals(rows: Entry[] = []): Promise<EntryWeek[]> {
+export async function parseWeekTotals(rows: Entry[] = [], excludeAuto:boolean = false): Promise<EntryWeek[]> {
     try {
         const weeks: EntryWeek[] = [{...DEFAULT_WEEK}, {...DEFAULT_WEEK}];
         if (rows.length === 0) {
@@ -32,6 +32,7 @@ export async function parseWeekTotals(rows: Entry[] = []): Promise<EntryWeek[]> 
         }
 
         rows.filter(row => !row.deleted)
+            .filter(row => !excludeAuto || row.idEntryType !== ENTRY_TYPES.AUTOMATIC)
             .forEach(row => {
                 const weekIndex = row.Week || 0;
                 const week = weeks[weekIndex];
@@ -42,8 +43,8 @@ export async function parseWeekTotals(rows: Entry[] = []): Promise<EntryWeek[]> 
                 week.hasErrors ||= row.errors.length > 0;
 
                 week.Approved = week.Approved && !!row.Approved;
-                week.ApprovedBy ||= row.ApprovedBy;
-                week.ApprovalTime ||= row.ApprovalTime;
+                week.ApprovedBy = week.Approved ? row.ApprovedBy : 0;
+                week.ApprovalTime = week.Approved ? row.ApprovalTime : null;
 
                 week.EmployeeApproved &&= !!row.EmployeeApproved;
                 week.EmployeeApprovalTime ||= row.EmployeeApprovalTime;
@@ -136,4 +137,19 @@ export async function validateEntries(rows: Entry[] = []): Promise<Entry[]> {
         }
         return Promise.reject(new Error('validateEntries()'))
     }
+}
+
+export const changeRequiresApproval = (from:number, to:number):boolean => {
+    if (from === to) {
+        return false;
+    }
+    switch (from) {
+    case ENTRY_TYPES.HOLIDAY:
+        return ![ENTRY_TYPES.MED_ASSIST, ENTRY_TYPES.BEREAV_JURY, ENTRY_TYPES.MANUAL].includes(to);
+    case ENTRY_TYPES.PERSONAL_LEAVE:
+        return ![ENTRY_TYPES.HOLIDAY, ENTRY_TYPES.BEREAV_JURY, ENTRY_TYPES.MED_ASSIST].includes(to);
+    case ENTRY_TYPES.MED_ASSIST:
+        return ![ENTRY_TYPES.MANUAL, ENTRY_TYPES.HOLIDAY].includes(to);
+    }
+    return true;
 }

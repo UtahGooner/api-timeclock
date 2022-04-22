@@ -9,6 +9,7 @@ export interface BannerImage {
 export interface PayPeriod {
     id: number,
     startDate: string,
+    week2StartDate:string,
     endDate: string,
     completed: boolean|1|0,
 }
@@ -89,6 +90,7 @@ export interface BaseEntry {
     idUser: number,
     EntryDate: string|Date,
     Duration: number,
+    idPayPeriod?: number,
     Note?: string,
 }
 export interface Entry extends BaseEntry {
@@ -100,6 +102,7 @@ export interface Entry extends BaseEntry {
     ApprovalTime: string|null,
     deleted: boolean|1|0,
     deletedBy: number,
+    idPayPeriod: number,
     timestamp: string,
     actions: EntryAction[],
     isClockedIn: boolean|1|0,
@@ -178,6 +181,14 @@ export interface PRImportData {
     seconds: number,
 }
 
+export interface ClockActionOptions {
+    ip: string,
+    userId: number,
+    idEntry?: number|string,
+    override?: boolean,
+    entryDate?: string|Date,
+    notes?: string,
+}
 
 export interface ClockActionBody {
     loginCode: string,
@@ -191,4 +202,24 @@ export interface ClockActionResult {
     entry?: Entry|null,
     existing?: Entry|null,
     warning?: string,
+}
+
+export interface AdjustClockProps {
+    idEmployee: number,
+    idEntry: number|string,
+    idUser: number,
+    action: BaseEntryAction,
+    comment?: string,
+}
+
+export interface EntryType {
+    id: number,
+    SageCode: string,
+    ShortCode: string,
+    Description: string,
+    active: boolean|1|0,
+}
+
+export interface EntryTypeList {
+    [key: number]: EntryType,
 }

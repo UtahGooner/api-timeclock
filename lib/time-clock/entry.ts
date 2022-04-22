@@ -1,12 +1,15 @@
 import Debug from 'debug';
 import {mysql2Pool} from 'chums-local-modules';
-import {BaseEntry, BaseEntryAction, Entry, EntryAction} from "../types";
+import {AdjustClockProps, BaseEntry, BaseEntryAction, ClockActionResult, Entry, EntryAction} from "../types";
 import {ResultSetHeader, RowDataPacket} from "mysql2";
-import {isClockedIn, validateEntries} from "./utils.js";
-import {ENTRY_TYPES} from "./settings.js";
+import {changeRequiresApproval, entrySorter, isClockedIn, parseWeekTotals, validateEntries} from "./utils.js";
+import {defaultAutoEntry, ENTRY_TYPES, STD_HOURS} from "./constants.js";
+import {loadEmployees} from "./employee.js";
+import {loadPayPeriods} from "./pay-periods.js";
 
-const debug = Debug('chums:lib:timeclock:entry');
 
+const debug = Debug('chums:lib:time-clock:entry');
+const API_USER_ID = Number(process.env.API_USER_ID || 0);
 
 
 interface EntryActionRow extends EntryAction, RowDataPacket {
@@ -52,9 +55,10 @@ interface LoadEntryProps {
     idEmployee: string | number,
     id?: string | number,
     idEntryType?: string | number,
+    idUser?: number
 }
 
-export async function loadEmployeeEntry({idEmployee, id}: LoadEntryProps): Promise<Entry|null> {
+export async function loadEmployeeEntry({idEmployee, id}: LoadEntryProps): Promise<Entry | null> {
     try {
         if (id === 0) {
             return null;
@@ -64,7 +68,7 @@ export async function loadEmployeeEntry({idEmployee, id}: LoadEntryProps): Promi
         }
         const [entry] = await loadEntries(idEmployee, [Number(id)]);
         return entry || null;
-    } catch(err:unknown) {
+    } catch (err: unknown) {
         if (err instanceof Error) {
             debug("loadEmployeeEntry()", err.message);
             return Promise.reject(err);
@@ -91,8 +95,7 @@ export async function loadEmployeeLatestEntry({
                                               MAX(EndDate)   AS EndDate
                                        FROM timeclock.PayPeriods
                                        WHERE completed = 0
-                                         AND StartDate < UNIX_TIMESTAMP()
-                                       ) payPeriods
+                                         AND StartDate < UNIX_TIMESTAMP()) payPeriods
                                        ON e.EntryDate BETWEEN payPeriods.StartDate
                                            AND payPeriods.EndDate
                        WHERE deleted = 0
@@ -148,11 +151,32 @@ export async function saveNewEntry(entry: BaseEntry): Promise<Entry> {
         }
 
         const {idEmployee, idEntryType, idUser, EntryDate, Duration, Note} = entry;
-        const query = `INSERT INTO timeclock.Entry (idEmployee, idEntryType, idUser, EntryDate, Duration, Note)
-                       VALUES (:idEmployee, :idEntryType, :idUser, UNIX_TIMESTAMP(:EntryDate), :Duration, :Note)`;
+        const query = `INSERT INTO timeclock.Entry (idEmployee,
+                                                    idEntryType,
+                                                    idUser,
+                                                    EntryDate,
+                                                    Duration,
+                                                    Note,
+                                                    idPayPeriod)
+                       VALUES (:idEmployee,
+                               :idEntryType,
+                               :idUser,
+                               UNIX_TIMESTAMP(:EntryDate),
+                               :Duration,
+                               :Note,
+                               (
+                               SELECT id
+                               FROM timeclock.PayPeriods
+                               WHERE UNIX_TIMESTAMP(:EntryDate) BETWEEN StartDate AND EndDate))`;
         const args = {idEmployee, idEntryType, EntryDate, idUser, Duration, Note}
         const [result] = await mysql2Pool.query<ResultSetHeader>(query, args);
         const [_entry] = await loadEntries(idEmployee, [result.insertId], true);
+        await employeeApproveEntries(entry.idEmployee, _entry.idPayPeriod, false);
+        await supervisorApproveEntries(entry.idEmployee, _entry.idPayPeriod, 0, false);
+        if (_entry.idEntryType !== ENTRY_TYPES.AUTOMATIC) {
+            await autoGenerateSalaryEntries(_entry.idEmployee, _entry.idPayPeriod);
+        }
+
         return _entry;
     } catch (err: unknown) {
         if (err instanceof Error) {
@@ -163,24 +187,40 @@ export async function saveNewEntry(entry: BaseEntry): Promise<Entry> {
     }
 }
 
-export async function saveEntry(entry: Entry): Promise<Entry> {
+export async function saveEntry(entry: BaseEntry): Promise<Entry | null> {
     try {
-        const {id, idEmployee, idEntryType, idUser, EntryDate, Duration, Note} = entry;
+        const {id, idEmployee, idEntryType, idUser, EntryDate, Note} = entry;
+        let {Duration} = entry;
         if (!id) {
             return await saveNewEntry(entry);
         }
         if (!EntryDate) {
             return Promise.reject(new Error('Invalid entry date'));
         }
+
+        const existing = await loadEmployeeEntry({idEmployee, id});
+
+        if (idEntryType === ENTRY_TYPES.TIMECLOCK) {
+            if (existing && existing.Duration !== Duration) {
+                Duration = existing.Duration;
+            }
+        }
         const sql = `UPDATE timeclock.Entry
                      SET idEntryType = :idEntryType,
                          EntryDate   = UNIX_TIMESTAMP(:EntryDate),
                          Duration    = :Duration,
-                         Note        = :Note
+                         Note        = :Note,
+                         idUser      = :idUser
                      WHERE id = :id`;
-        await mysql2Pool.query(sql, {id, idEntryType, EntryDate, Duration, Note: Note || ''});
-        const [_entry] = await loadEntries(idEmployee, [id]);
-        return _entry;
+        await mysql2Pool.query(sql, {id, idEntryType, idUser, EntryDate, Duration, Note: Note || ''});
+        if (existing && existing.Approved && (Duration !== existing.Duration || changeRequiresApproval(existing.idEntryType, idEntryType))) {
+            await employeeApproveEntries(existing.idEmployee, existing.idPayPeriod, false);
+            await supervisorApproveEntries(existing.idEmployee, existing.idPayPeriod, 0, false);
+            if (entry.idEntryType !== ENTRY_TYPES.AUTOMATIC) {
+                await autoGenerateSalaryEntries(idEmployee, existing.idPayPeriod);
+            }
+        }
+        return await loadEmployeeEntry({idEmployee, id});
     } catch (err: unknown) {
         if (err instanceof Error) {
             debug("clockIn()", err.message);
@@ -264,7 +304,7 @@ async function loadEntriesHelper(rows: Entry[]): Promise<Entry[]> {
     }
 }
 
-export async function loadEntries(idEmployee: number | string, entryIDs: number[], skipValidation:boolean = false): Promise<Entry[]> {
+export async function loadEntries(idEmployee: number | string, entryIDs: number[], skipValidation: boolean = false): Promise<Entry[]> {
     try {
         if (entryIDs.length === 0) {
             return [];
@@ -288,6 +328,7 @@ export async function loadEntries(idEmployee: number | string, entryIDs: number[
                               e.ApprovedBy,
                               e.deleted,
                               e.deletedBy,
+                              e.idPayPeriod,
                               e.timestamp
                        FROM timeclock.Entry e
                             INNER JOIN timeclock.PayPeriods pp
@@ -308,5 +349,130 @@ export async function loadEntries(idEmployee: number | string, entryIDs: number[
         }
         debug("loadEntries()", err);
         return Promise.reject(new Error('Error in loadEntries()'));
+    }
+}
+
+export async function deleteClockEntry({
+                                           idEmployee,
+                                           idEntry,
+                                           idUser,
+                                           action,
+                                           comment
+                                       }: AdjustClockProps): Promise<ClockActionResult> {
+    try {
+        const existing = await loadEmployeeEntry({idEmployee, id: idEntry});
+        if (!existing) {
+            return Promise.reject(new Error('Clock entry not found'));
+        }
+        await saveEntryAction({
+            ...action,
+            idEntry: existing.id,
+        });
+        const sql = `UPDATE timeclock.Entry
+                     SET deleted   = 1,
+                         deletedBy = :idUser,
+                         Note      = :Note
+                     WHERE id = :id`;
+        const args = {
+            id: idEntry,
+            Note: [existing.Note, comment].filter(val => !!val).join(';'),
+            idUser,
+        };
+        await mysql2Pool.query(sql, args);
+        await autoGenerateSalaryEntries(idEmployee, existing.idPayPeriod);
+        const entry = await loadEmployeeEntry({idEmployee: idEmployee, id: existing.id});
+        const warning = !entry ? 'Clock Entry not found' : undefined;
+        return {entry, warning};
+    } catch (err: unknown) {
+        if (err instanceof Error) {
+            debug("deleteClockEntry()", err.message);
+            return Promise.reject(err);
+        }
+        debug("deleteClockEntry()", err);
+        return Promise.reject(new Error('Error in deleteClockEntry()'));
+    }
+}
+
+export async function employeeApproveEntries(idEmployee: number | string, idPayPeriod: number | string, approved: boolean) {
+    try {
+        const sql = `UPDATE timeclock.Entry
+                     SET EmployeeApproved     = :approved,
+                         EmployeeApprovalTime = IF(:approved, NOW(), NULL)
+                     WHERE idEmployee = :idEmployee
+                       AND idPayPeriod = :idPayPeriod`;
+        const args = {idEmployee, idPayPeriod, approved: approved ? 1 : 0}
+        await mysql2Pool.query(sql, args);
+    } catch (err: unknown) {
+        if (err instanceof Error) {
+            debug("employeeApproveEntries()", err.message);
+            return Promise.reject(err);
+        }
+        debug("employeeApproveEntries()", err);
+        return Promise.reject(new Error('Error in employeeApproveEntries()'));
+    }
+}
+
+export async function supervisorApproveEntries(idEmployee: number | string, idPayPeriod: number | string, idUser: number | string, approved: boolean) {
+    try {
+        const sql = `UPDATE timeclock.Entry
+                     SET Approved     = :approved,
+                         ApprovalTime = IF(:approved, NOW(), NULL),
+                         ApprovedBy   = :idUser
+                     WHERE idEmployee = :idEmployee
+                       AND idPayPeriod = :idPayPeriod`;
+        const args = {idEmployee, idPayPeriod, approved: approved ? 1 : 0, idUser};
+        await mysql2Pool.query(sql, args);
+    } catch (err: unknown) {
+        if (err instanceof Error) {
+            debug("employeeApproveEntries()", err.message);
+            return Promise.reject(err);
+        }
+        debug("employeeApproveEntries()", err);
+        return Promise.reject(new Error('Error in employeeApproveEntries()'));
+    }
+}
+
+export async function autoGenerateSalaryEntries(idEmployee: number, idPayPeriod: number): Promise<void> {
+    try {
+        const [employee] = await loadEmployees({
+            userId: API_USER_ID,
+            idEmployee
+        });
+        if (!employee || employee.EmployeeStatus !== 'A' || employee.PayMethod !== 'S') {
+            return;
+        }
+        const [payPeriod] = await loadPayPeriods(idPayPeriod);
+        if (!payPeriod || payPeriod.completed) {
+            return Promise.reject(new Error('Invalid Pay Period'))
+        }
+
+        const entries = await loadPayPeriodEntries(idEmployee, idPayPeriod);
+        const [entryW1 = defaultAutoEntry, entryW2 = defaultAutoEntry] = entries
+            .filter(e => e.idEntryType === ENTRY_TYPES.AUTOMATIC && !e.deleted)
+            .sort(entrySorter);
+        const totals = await parseWeekTotals(entries, true);
+        if (totals[0].Duration > 0 || !entryW1.id) {
+            if (!entryW1.id) {
+                entryW1.EntryDate = payPeriod.startDate;
+                entryW1.Note = 'Auto-Generated';
+            }
+            entryW1.Duration = STD_HOURS - totals[0].Duration;
+            await saveEntry(entryW1);
+        }
+        if (totals[1].Duration > 0 || !entryW2.id) {
+            if (!entryW2.id) {
+                entryW2.EntryDate = payPeriod.week2StartDate;
+                entryW2.Note = 'Auto-Generated';
+            }
+            entryW2.Duration = STD_HOURS - totals[0].Duration;
+            await saveEntry(entryW2);
+        }
+    } catch (err: unknown) {
+        if (err instanceof Error) {
+            debug("autoGenerateSalaryEntries()", err.message);
+            return Promise.reject(err);
+        }
+        debug("autoGenerateSalaryEntries()", err);
+        return Promise.reject(new Error('Error in autoGenerateSalaryEntries()'));
     }
 }

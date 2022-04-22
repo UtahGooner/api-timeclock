@@ -5,6 +5,7 @@ import {mysql2Pool} from "chums-local-modules";
 import {Request, Response} from "express";
 import {loadEmployeeLatestEntry, loadPayPeriodEntries} from "./entry.js";
 import {parseWeekTotals} from "./utils.js";
+import {loadCurrentPayPeriod} from "./pay-periods.js";
 
 
 const debug = Debug('chums:lib:time-clock:employee');
@@ -88,7 +89,10 @@ export async function loadEmployees({
                                            FROM users.vw_usergroups
                                            WHERE ROLE = 'tcadmin'
                                              AND userid = :userId) > 0
-                                       # employees that the user supervises
+                                       # API Access
+                                       OR (SELECT count(*) FROM users.api_access where enabled = 1 AND id_api_access = (:userId * -1)) > 0
+                                             
+                                        # employees that the user supervises
                                        OR l.id IN (
                                                   SELECT idEmployee
                                                   FROM timeclock.Supervision
@@ -248,8 +252,14 @@ export const getEmployee = async (req: Request, res: Response) => {
             ...req.params,
             userId: res.locals.profile?.user?.id,
         });
-        const entry = await loadEmployeeLatestEntry({idEmployee: employee.id});
-        res.json({employee, entry})
+        const payPeriod = await loadCurrentPayPeriod();
+        const entries = await loadPayPeriodEntries(employee.id, payPeriod?.id || 0);
+        if (employee.EmployeeStatus === 'A' && employee.PayMethod === 'S' && entries.length === 0) {
+
+        }
+        const hasErrors = entries.filter(entry => entry.errors.length).length > 0;
+        const totals = await parseWeekTotals(entries);
+        res.json({employee, entries, hasErrors, totals})
     } catch (err: unknown) {
         if (err instanceof Error) {
             debug("getEmployee()", err.message);

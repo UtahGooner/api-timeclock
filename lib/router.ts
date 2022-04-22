@@ -19,7 +19,7 @@ import {
     postHSAKey,
     postLoginCode
 } from "./time-clock/employee.js";
-import {buildPayPeriods, getCurrentPayPeriod, getPayPeriods, postCompletePayPeriod} from "./time-clock/pay-periods.js";
+import {buildPayPeriods, getCurrentPayPeriod, getPayPeriods, putCompletePayPeriod} from "./time-clock/pay-periods.js";
 import {getPayPeriodSpreadSheet, getPayPeriodSSData} from "./payroll/pay-period-spreadsheet.js";
 import {getPRImportFile, testPRImportFile} from "./payroll/sage-import.js";
 import {postClockIn, postClockOut} from "./time-clock/clock-actions.js";
@@ -78,7 +78,7 @@ router.get('/pay-period/:idPayPeriod(\\d+)/totals/:idEmployee(\\d+)?', getEmploy
 router.get('/pay-period/:idPayPeriod(\\d+)/totals/xlsx/data', getPayPeriodSSData);
 router.get('/pay-period/:idPayPeriod(\\d+)/totals/xlsx', getPayPeriodSpreadSheet);
 router.get('/pay-period/on/:date', getCurrentPayPeriod);
-router.post('/pay-period/:idPayPeriod(\\d+)/complete', validateAdmin, postCompletePayPeriod);
+router.put('/pay-period/:idPayPeriod(\\d+)/complete', validateAdmin, putCompletePayPeriod);
 router.post('/pay-period/build', buildPayPeriods);
 
 router.get('/sage-import/:idPayPeriod(\\d+)/download', validateAdmin, getPRImportFile)

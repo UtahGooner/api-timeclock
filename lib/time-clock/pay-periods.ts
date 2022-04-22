@@ -15,6 +15,7 @@ export async function loadPayPeriods(id?: number | string): Promise<PayPeriod[]>
     try {
         const query = `SELECT id,
                               FROM_UNIXTIME(StartDate) AS startDate,
+                              DATE_ADD(FROM_UNIXTIME(StartDate), INTERVAL 1 Week) as week2StartDate,
                               FROM_UNIXTIME(EndDate)   AS endDate,
                               completed
                        FROM timeclock.PayPeriods
@@ -36,10 +37,11 @@ export async function loadPayPeriods(id?: number | string): Promise<PayPeriod[]>
     }
 }
 
-export async function loadCurrentPayPeriod(today: string): Promise<PayPeriod|null> {
+export async function loadCurrentPayPeriod(today?: string): Promise<PayPeriod|null> {
     try {
         const sql = `SELECT id,
                             FROM_UNIXTIME(StartDate) AS startDate,
+                            DATE_ADD(FROM_UNIXTIME(StartDate), INTERVAL 1 Week) as week2StartDate,
                             FROM_UNIXTIME(EndDate)   AS endDate,
                             completed
                      FROM timeclock.PayPeriods
@@ -251,16 +253,16 @@ export async function getPayPeriods(req: Request, res: Response) {
     }
 }
 
-export async function postCompletePayPeriod(req: Request, res: Response) {
+export async function putCompletePayPeriod(req: Request, res: Response) {
     try {
         const period = await markPayPeriodCompleted(req.params.id);
         res.json({period});
     } catch (err: unknown) {
         if (err instanceof Error) {
-            debug("postCompletePayPeriod()", err.message);
+            debug("putCompletePayPeriod()", err.message);
             res.json({error: err.message});
         }
-        debug("postCompletePayPeriod()", err);
+        debug("putCompletePayPeriod()", err);
         res.json({error: err});
     }
 }

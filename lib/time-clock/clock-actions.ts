@@ -1,18 +1,34 @@
 import Debug from 'debug';
 import {loadEmployees} from "./employee.js";
-import {loadEmployeeEntry, loadEmployeeLatestEntry, saveEntry, saveEntryAction, saveNewEntry} from "./entry.js";
+import {
+    deleteClockEntry,
+    loadEmployeeEntry,
+    loadEmployeeLatestEntry,
+    saveEntry,
+    saveEntryAction,
+    saveNewEntry
+} from "./entry.js";
 import {Request, Response} from "express";
-import {BaseEntryAction, ClockActionBody, ClockActionResult, Employee, Entry, EntryAction} from "../types";
-import {CLOCK_COMMENT_ACTION, CLOCK_IN_ACTION, CLOCK_OUT_ACTION, ENTRY_TYPES} from "./settings.js";
+import {
+    AdjustClockProps,
+    BaseEntryAction,
+    ClockActionBody, ClockActionOptions,
+    ClockActionResult,
+    Employee,
+    Entry,
+    EntryAction
+} from "../types";
+import {
+    CLOCK_COMMENT_ACTION,
+    CLOCK_IN_ACTION,
+    CLOCK_OUT_ACTION,
+    ENTRY_TYPES,
+    LOGIN_ERROR,
+    WARNING_CLOCKED_IN, WARNING_CLOCKED_OUT, WARNING_ENTRY_NOT_FOUND
+} from "./constants.js";
 
 const debug = Debug('chums:lib:time-clock:clock-actions');
 
-const WARNING_CLOCKED_IN = 'Currently clocked in or missing previous clock out action';
-const WARNING_CLOCKED_OUT = 'Currently clocked out or missing previous clock in action';
-const WARNING_ENTRY_NOT_FOUND = 'Entry not found.';
-const CLOCK_OUT_ERROR = "Your 'clock out' action failed";
-const CLOCK_IN_ERROR = "Your 'clock in' action failed";
-const LOGIN_ERROR = 'Invalid Login Code';
 
 function clockActionError(reason:string):Error {
     const error = new Error(reason);
@@ -39,15 +55,8 @@ async function loadClockActionEmployee(loginCode:string):Promise<Employee> {
         return Promise.reject(clockActionError('Error in loadClockActionEmployee()'));
     }
 }
-export interface EntryOptions {
-    ip: string,
-    userId: number,
-    idEntry?: number|string,
-    override?: boolean,
-    entryDate?: string|Date,
-    notes?: string,
-}
-async function clockInHandler(loginCode:string, options:EntryOptions):Promise<ClockActionResult> {
+
+async function clockInHandler(loginCode:string, options:ClockActionOptions):Promise<ClockActionResult> {
     try {
         const override = options.override;
         const idUser = options.userId || 0;
@@ -89,13 +98,7 @@ async function clockInHandler(loginCode:string, options:EntryOptions):Promise<Cl
     }
 }
 
-export interface AdjustClockProps {
-    idEmployee: number,
-    idEntry: number|string,
-    idUser: number,
-    action: BaseEntryAction,
-    comment?: string,
-}
+
 async function adjustClockHandler({idEmployee, idEntry, idUser, action, comment}:AdjustClockProps):Promise<ClockActionResult> {
     try {
         const existing = await loadEmployeeEntry({idEmployee, id: idEntry});
@@ -136,7 +139,7 @@ async function adjustClockHandler({idEmployee, idEntry, idUser, action, comment}
 
 }
 
-async function clockOutHandler(loginCode:string, options:EntryOptions):Promise<ClockActionResult> {
+async function clockOutHandler(loginCode:string, options:ClockActionOptions):Promise<ClockActionResult> {
     try {
         const override = options.override;
         const idUser = options.userId || 0;
@@ -194,35 +197,9 @@ async function clockOutHandler(loginCode:string, options:EntryOptions):Promise<C
     }
 }
 
-export async function deleteClockEntry({idEmployee, idEntry, idUser, action, comment}:AdjustClockProps):Promise<ClockActionResult> {
-    try {
-        const existing = await loadEmployeeEntry({idEmployee, id: idEntry});
-        if (!existing) {
-            return Promise.reject(new Error('Clock entry not found'));
-        }
-        await saveEntryAction({
-            ...action,
-            idEntry: existing.id,
-        });
-        await saveEntry({
-            ...existing,
-            Note: [existing.Note, comment].filter(val => !!val).join(';'),
-            deleted: true,
-            deletedBy: idUser,
-        })
-        const entry = await loadEmployeeEntry({idEmployee: idEmployee, id: existing.id});
-        const warning = !entry ? 'Clock Entry not found': undefined;
-        return {entry, warning};
-    } catch(err:unknown) {
-        if (err instanceof Error) {
-            debug("deleteClockEntry()", err.message);
-            return Promise.reject(err);
-        }
-        debug("deleteClockEntry()", err);
-        return Promise.reject(new Error('Error in deleteClockEntry()'));
-    }
-}
+export async function approvePayPeriodEntries() {
 
+}
 
 export const postClockIn = async (req:Request, res:Response) => {
     try {
@@ -301,3 +278,4 @@ export const deleteEntry = async (req:Request, res:Response) => {
         res.json({error: 'unknown error in deleteEntry'});
     }
 }
+
